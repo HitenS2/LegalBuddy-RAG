@@ -1,17 +1,22 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom"; // Import useNavigate
+import { useNavigate } from "react-router-dom";
 import { FileUp, MessageCircle, FileSearch } from "lucide-react";
 
-export const Welcome: React.FC = () => {
+interface WelcomeProps {
+  onFileSelect: (file: File) => void;
+}
+
+export const Welcome: React.FC<WelcomeProps> = ({ onFileSelect }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const navigate = useNavigate(); // Initialize navigate function
+  const navigate = useNavigate();
 
   // Handle file selection
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       setSelectedFile(file);
+      onFileSelect(file);
     }
   };
 
@@ -27,31 +32,21 @@ export const Welcome: React.FC = () => {
     formData.append("files", selectedFile);
 
     try {
-      // Get authentication token from localStorage
-      const token = localStorage.getItem('token');
-      if (!token) {
-        alert("You must be logged in to upload files.");
-        navigate('/login');
-        return;
-      }
-
       const response = await fetch("http://127.0.0.1:5000/upload", {
         method: "POST",
-        headers: {
-          'Authorization': `Bearer ${token}`  // Add token to headers
-        },
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error("Failed to upload file");
+        const errorData = await response.json();
+        throw new Error(`Failed to upload file: ${errorData.error || response.statusText}`);
       }
 
       const data = await response.json();
       console.log("Upload Response:", data);
       alert("File uploaded successfully!");
 
-      // ✅ Navigate to the /summary page after a successful upload
+      // Navigate to the /summary page after a successful upload
       navigate("/summary");
 
     } catch (error) {
@@ -86,58 +81,60 @@ export const Welcome: React.FC = () => {
               <p className="text-gray-600 text-lg">
                 Start by uploading your legal document for analysis.
               </p>
+              <div className="mt-4">
+                <input
+                  type="file"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  id="file-upload"
+                  accept=".pdf,.docx,.txt"
+                />
+                <label
+                  htmlFor="file-upload"
+                  className="cursor-pointer bg-[#2f5233] text-white px-4 py-2 rounded-md hover:bg-[#1e3a23] transition-colors"
+                >
+                  Choose File
+                </label>
+                {selectedFile && (
+                  <p className="mt-2 text-sm text-gray-600">
+                    Selected: {selectedFile.name}
+                  </p>
+                )}
+              </div>
             </div>
-
             <div className="p-8 bg-[#f8f5f2] rounded-lg border-l-4 border-[#2f5233]">
               <div className="flex items-center gap-3 mb-3">
                 <FileSearch className="w-8 h-8 text-[#2f5233]" />
                 <h3 className="font-semibold text-[#8b4513] text-xl">Step 2</h3>
               </div>
-              <h4 className="font-medium text-gray-800 mb-2 text-lg">Review Analysis</h4>
+              <h4 className="font-medium text-gray-800 mb-2 text-lg">Analyze & Extract</h4>
               <p className="text-gray-600 text-lg">
-                Get instant insights and key information extraction.
+                Our AI will analyze your document and extract key information.
               </p>
             </div>
-
             <div className="p-8 bg-[#f8f5f2] rounded-lg border-l-4 border-[#2f5233]">
               <div className="flex items-center gap-3 mb-3">
                 <MessageCircle className="w-8 h-8 text-[#2f5233]" />
                 <h3 className="font-semibold text-[#8b4513] text-xl">Step 3</h3>
               </div>
-              <h4 className="font-medium text-gray-800 mb-2 text-lg">Get Assistance</h4>
+              <h4 className="font-medium text-gray-800 mb-2 text-lg">Chat & Explore</h4>
               <p className="text-gray-600 text-lg">
-                Chat with our AI to understand your document better.
+                Ask questions and get insights about your document.
               </p>
             </div>
           </div>
-
-          <div className="mt-10 flex flex-col items-center">
-            <label
-              htmlFor="file-upload"
-              className={`inline-flex items-center gap-3 px-10 py-5 bg-[#2f5233] text-white rounded-xl cursor-pointer hover:bg-[#1e351f] transition-colors shadow-xl text-lg ${
-                isUploading ? "opacity-50 cursor-not-allowed" : ""
-              }`}
+          <div className="flex justify-center mt-8">
+            <button
+              onClick={handleFileUpload}
+              disabled={!selectedFile || isUploading}
+              className={`px-6 py-3 rounded-lg text-lg font-semibold ${
+                !selectedFile || isUploading
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-[#2f5233] hover:bg-[#1e3a23] text-white'
+              } transition-colors`}
             >
-              <FileUp className="w-6 h-6" />
-              {selectedFile ? selectedFile.name : "Select a File"}
-              <input
-                type="file"
-                id="file-upload"
-                onChange={handleFileChange}
-                className="hidden"
-                disabled={isUploading}
-              />
-            </label>
-
-            {selectedFile && (
-              <button
-                onClick={handleFileUpload}
-                className="mt-4 px-8 py-4 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700 transition"
-                disabled={isUploading}
-              >
-                {isUploading ? "Uploading..." : "Upload File"}
-              </button>
-            )}
+              {isUploading ? 'Uploading...' : 'Upload & Analyze'}
+            </button>
           </div>
         </div>
       </div>

@@ -24,13 +24,8 @@ interface ExtractInfoProps {
   selectedFile: File | null;
 }
 
-const formatSectionName = (section: string) =>
-  section.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-
 export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
-  const [extractionData, setExtractionData] = useState<ExtractionData | null>(
-    null
-  );
+  const [extractionData, setExtractionData] = useState<ExtractionData | null>(null);
   const [extractionId, setExtractionId] = useState<number | null>(null);
   const [existingExtractions, setExistingExtractions] = useState<Extraction[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -42,16 +37,8 @@ export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
   useEffect(() => {
     const fetchExistingExtractions = async () => {
       try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          throw new Error("Authentication required");
-        }
-        
         const response = await fetch("http://127.0.0.1:5000/extractions", {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${token}`
-          }
+          method: "GET"
         });
 
         if (!response.ok) {
@@ -85,16 +72,8 @@ export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
     setLoading(true);
     setError(null);
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error("Authentication required");
-      }
-      
       const response = await fetch(`http://127.0.0.1:5000/extractions/${id}`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${token}`
-        }
+        method: "GET"
       });
 
       if (!response.ok) {
@@ -127,16 +106,8 @@ export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
     try {
       console.log("📡 Generating new extraction from backend...");
       
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error("Authentication required");
-      }
-      
       const response = await fetch("http://127.0.0.1:5000/extract", {
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${token}`
-        }
+        method: "GET"
       });
 
       if (!response.ok) {
@@ -164,17 +135,10 @@ export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
     
     setIsPdfLoading(true);
     try {
-      // Get the token from localStorage
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error("Authentication required");
-      }
-      
       const response = await fetch("http://127.0.0.1:5000/download/extraction", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({ extraction: extractionData.answer }),
       });
@@ -199,6 +163,18 @@ export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
       setIsPdfLoading(false);
     }
   };
+
+  const sections = [
+    { label: "1) Entities Name & Address Details", key: "entities" },
+    { label: "2) Contract Start Date & End Date", key: "dates" },
+    { label: "3) Scope of Work", key: "scope" },
+    { label: "4) SLA Clause", key: "sla" },
+    { label: "5) Penalty Clause", key: "penalty" },
+    { label: "6) Confidentiality Clause", key: "confidentiality" },
+    { label: "7) Renewal & Termination Clause", key: "termination" },
+    { label: "8) Commercials / Payment Terms", key: "commercials" },
+    { label: "9) Risks / Assumptions", key: "risks" }
+  ];
 
   return (
     <div className="w-full min-h-screen bg-gray-100 flex items-center justify-center px-4 py-10">
@@ -250,23 +226,7 @@ export const ExtractInfo: React.FC<ExtractInfoProps> = ({ selectedFile }) => {
         ) : extractionData && typeof extractionData.answer === "object" ? (
           <>
             <div className="max-h-[600px] overflow-y-auto text-gray-800 text-lg leading-relaxed p-4 bg-gray-50 border border-gray-300 rounded-lg space-y-6">
-              {[
-                {
-                  label: "1) Entities Name & Address Details",
-                  key: "entities",
-                },
-                { label: "2) Contract Start Date & End Date", key: "dates" },
-                { label: "3) Scope", key: "scope" },
-                { label: "4) SLA Clause", key: "sla" },
-                { label: "5) Penalty Clause", key: "penalty" },
-                { label: "6) Confidentiality Clause", key: "confidentiality" },
-                {
-                  label: "7) Renewal and Termination Clause",
-                  key: "termination",
-                },
-                { label: "8) Commercials / Payment Terms", key: "commercials" },
-                { label: "9) Risks / Assumptions", key: "risks" },
-              ].map(({ label, key }) => {
+              {sections.map(({ label, key }) => {
                 const content = extractionData.answer[key];
                 if (!content) return null;
                 

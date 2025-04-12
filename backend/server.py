@@ -1,12 +1,7 @@
 from random import randint
-from flask import Flask, request, jsonify, render_template, make_response, session
+from flask import Flask, request, jsonify, render_template, make_response
 from flask_cors import CORS
 import json
-import bcrypt
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta
-import jwt
-
 import os
 import time
 import traceback
@@ -38,126 +33,8 @@ CORS(app, supports_credentials=True)
 
 load_dotenv()
 
-# Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///legalai.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev_secret_key')
-app.config['JWT_EXPIRATION_DELTA'] = timedelta(days=7)
-
-db = SQLAlchemy(app)
-
-# Database Models
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password = db.Column(db.String(200), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    documents = db.relationship('Document', backref='owner', lazy=True)
-    chat_sessions = db.relationship('ChatSession', backref='user', lazy=True)
-    extractions = db.relationship('Extraction', backref='user', lazy=True)
-    
-    def __repr__(self):
-        return f'<User {self.email}>'
-
-class Document(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    filename = db.Column(db.String(255), nullable=False)
-    file_hash = db.Column(db.String(64), nullable=False)
-    file_type = db.Column(db.String(10), nullable=False)
-    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    
-    def __repr__(self):
-        return f'<Document {self.filename}>'
-
-class ChatSession(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    
-    # Relationship
-    messages = db.relationship('ChatMessage', backref='session', lazy=True)
-    
-    def __repr__(self):
-        return f'<ChatSession {self.id}>'
-
-class ChatMessage(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    content = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    is_user = db.Column(db.Boolean, default=True)  # True if message from user, False if from AI
-    session_id = db.Column(db.Integer, db.ForeignKey('chat_session.id'), nullable=False)
-    
-    def __repr__(self):
-        return f'<ChatMessage {"User" if self.is_user else "AI"}: {self.content[:20]}...>'
-
-class Extraction(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    content = db.Column(db.JSON, nullable=False)
-    document_id = db.Column(db.Integer, db.ForeignKey('document.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    
-    def __repr__(self):
-        return f'<Extraction {self.id}>'
-
-# Create all database tables
-with app.app_context():
-    db.create_all()
-
-# JWT functions
-def generate_token(user_id):
-    payload = {
-        'exp': datetime.utcnow() + app.config['JWT_EXPIRATION_DELTA'],
-        'iat': datetime.utcnow(),
-        'sub': user_id
-    }
-    return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
-
-def decode_token(token):
-    try:
-        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
-        return payload['sub']
-    except jwt.ExpiredSignatureError:
-        return None  # Token expired
-    except jwt.InvalidTokenError:
-        return None  # Invalid token
-
-# Authentication decorator
-def token_required(f):
-    def decorated(*args, **kwargs):
-        token = None
-        
-        # Get token from Authorization header or cookies
-        auth_header = request.headers.get('Authorization')
-        if auth_header and auth_header.startswith('Bearer '):
-            token = auth_header.split(' ')[1]
-        
-        if not token:
-            return jsonify({'error': 'Authentication token is missing'}), 401
-        
-        user_id = decode_token(token)
-        if not user_id:
-            return jsonify({'error': 'Invalid or expired token'}), 401
-        
-        # Add user to request context
-        current_user = User.query.get(user_id)
-        if not current_user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        kwargs['current_user'] = current_user
-        return f(*args, **kwargs)
-    
-    # Preserve the name of the original function
-    decorated.__name__ = f.__name__
-    return decorated
-
 import subprocess
 import os
-
 
 groq_api_key = os.getenv('GROQ_API_KEY')
 groq_api_key_1 = os.getenv('GROQ_API_KEY_1')
@@ -377,32 +254,38 @@ QA_PROMPT = """
 You are a legal contract analyst AI. Read the provided contract context and answer the user's question using only specific legal information directly from the document.
 
 🔍 Instructions:
-1. Quote all directly relevant clauses using exact wording.
-2. Use bullets for multiple related clauses.
-3. Keep your **interpretation concise**, avoid repeating the clause itself.
-4. Flag any **missing info**, **blank fields**, or **placeholders** (e.g., [____], [XX]).
-5. If no answer is available, respond: ❌ Not explicitly stated in the document.
-6. Focus on **factual, legal answers only**. Do not generalize or infer beyond the contract text.
+1. Format all responses as key-value pairs
+2. Use nested key-value pairs for related information
+3. If no answer is available, respond: ❌ Not explicitly stated in the document
+4. Focus on factual, legal answers only. Do not generalize or infer beyond the contract text
+5. Do not include headers, formatting, or unnecessary text
+6. Start your response directly with the key-value pairs
+7. For risk-related queries, include:
+   - Explicit risk statements
+   - Penalties and consequences
+   - Compliance requirements
+   - Service level obligations
+   - Termination conditions
+8. NEVER include phrases like "Here is the answer:" or any other introductory text
+9. Start directly with the first key-value pair
+10. For nested information, use indentation without labels:
+    key: value
+      nested_key: nested_value
+      another_nested_key: another_nested_value
 
-📄 Format your response like this:
-
-**Clause(s) Found:**
-- "...quoted legal clause here..."
-- "...second clause here if applicable..."
-
-**Interpretation:**
-- A short explanation (1–2 lines) of what each clause implies.
-- Use bullets if multiple clauses apply.
-- If fields are blank or placeholders exist, explicitly mention them.
-
----
-
-User Question:
-{input}
+Format example:
+key1: value1
+key2: value2
+  nested_key1: nested_value1
+  nested_key2: nested_value2
+key3: value3
 
 Contract Context:
 {context}
-"""
+
+Question: {input}
+
+Answer:"""
 
 
 extraction_prompt = ChatPromptTemplate.from_template(
@@ -589,12 +472,18 @@ def vector_embedding(documents):
 def index():
     return render_template('index.html')
 
+# Add this near other global variables at the top
+stored_extraction = None
+stored_summary = None
+
+# Add this near other global variables at the top
+last_uploaded_files = set()
+
 # Upload endpoint: processes files, creates document chunks, and submits for vectorization
 
 
 @app.route('/upload', methods=['POST'])
-@token_required
-def upload_files(current_user):
+def upload_files():
     if 'files' not in request.files:
         return jsonify({"error": "No files provided"}), 400
 
@@ -602,11 +491,32 @@ def upload_files(current_user):
     if not files or all(file.filename == '' for file in files):
         return jsonify({"error": "No selected files"}), 400
 
+    # Clear existing data when new files are uploaded
+    global vectors, processed_files, stored_extraction, stored_summary, last_uploaded_files
+    vectors = None
+    processed_files = {}
+    stored_extraction = None
+    stored_summary = None
+
     all_documents = []
     processed_file_names = []
     uploaded_documents = []
     errors = []
     extracted_text = ""
+
+    # Get current file hashes
+    current_file_hashes = set()
+    for file in files:
+        if file and allowed_file(file.filename):
+            file.seek(0)
+            file_content = file.read()
+            file_hash = hashlib.md5(file_content).hexdigest()
+            current_file_hashes.add(file_hash)
+            file.seek(0)
+
+    # Check if these are the same files as last upload
+    is_consecutive_upload = current_file_hashes == last_uploaded_files
+    last_uploaded_files = current_file_hashes
 
     for file in files:
         try:
@@ -616,32 +526,16 @@ def upload_files(current_user):
                 file_hash = hashlib.md5(file_content).hexdigest()
                 file.seek(0)
 
-                # Save document record in database
-                file_extension = file.filename.rsplit('.', 1)[1].lower()
-                
-                # Check if the same file has been uploaded before by this user
-                existing_doc = Document.query.filter_by(file_hash=file_hash, user_id=current_user.id).first()
-                if not existing_doc:
-                    # Create new document record
-                    new_document = Document(
-                        filename=file.filename,
-                        file_hash=file_hash,
-                        file_type=file_extension,
-                        user_id=current_user.id
-                    )
-                    db.session.add(new_document)
-                    db.session.commit()
-                    uploaded_documents.append(new_document)
+                # Only skip if it's a consecutive upload of the same file
+                if is_consecutive_upload and file_hash in processed_files:
+                    print(f"File {file.filename} uploaded consecutively, using cached data...")
+                    docs = processed_files[file_hash]
                 else:
-                    uploaded_documents.append(existing_doc)
-                    
-                if file_hash not in processed_files:
                     docs = process_uploaded_file(file)
-                    all_documents.extend(docs)
                     processed_files[file_hash] = docs
-                    processed_file_names.append(file.filename)
-                else:
-                    print(f"File {file.filename} already processed, skipping...")
+
+                all_documents.extend(docs)
+                processed_file_names.append(file.filename)
         except Exception as e:
             error_msg = f"Error processing {file.filename}: {str(e)}"
             print(f"❌ {error_msg}\n{traceback.format_exc()}")
@@ -649,14 +543,16 @@ def upload_files(current_user):
 
     if all_documents:
         try:
-            global vectors
-            vectors = None
             vector_embedding(all_documents)
             extracted_text = "\n".join([
                 f"Preview from document chunk {i+1}:\n{doc.page_content[:500]}..."
                 for i, doc in enumerate(all_documents[:3])
             ])
 
+            # Perform extraction and store results
+            stored_extraction = perform_extraction()
+            stored_summary = generate_summary()
+            
         except Exception as e:
             errors.append(f"Error in vector embedding: {str(e)}")
 
@@ -673,36 +569,19 @@ def upload_files(current_user):
 
     return jsonify(response)
 
-# Extraction endpoint: returns detailed extraction using the full extraction prompt
-
-
-@app.route('/extract', methods=['GET'])
-@token_required
-def extract_details(current_user):
-    if not vectors:
-        return jsonify({"error": "No documents uploaded"}), 400
-    
-    # Get document ID from query parameters (optional)
-    document_id = request.args.get('document_id')
-    
-    # If document ID is provided, verify it belongs to the current user
-    if document_id:
-        document = Document.query.filter_by(id=document_id, user_id=current_user.id).first()
-        if not document:
-            return jsonify({"error": "Document not found or access denied"}), 404
-    
+def perform_extraction():
+    """Helper function to perform extraction and return results"""
     try:
-        # Maintain sequence as per the image
         section_prompts = {
-            "entities": "Extract all party names and their full addresses mentioned in the contract. For each party, include their designation, role in the document, responsibilities, obligations, relationships with other parties, and associated terms/conditions.",
-            "dates": "Extract all start and end dates of the contract. Include the context of these dates (what they represent), timeline, milestones, and any associated deadlines. Also cover renewal or termination dates if applicable.",
+            "entities": "Extract all party names and their full addresses mentioned in the contract. For each party, include their designation, role in the document, responsibilities, obligations, relationships with other parties, and associated terms/conditions on new line . Just extract key information. ",
+            "dates": "Extract all start and end dates of the contract. Include the context of these dates (what they represent), timeline, milestones, and any associated deadlines. Also cover renewal or termination dates if applicable. Just extract key information.   ",
             "scope": "Extract the scope of work or services mentioned in the contract. Describe what the agreement entails, roles, deliverables, or services.",
             "sla": "Extract SLA (Service Level Agreement) clauses. Include details like expected performance levels, response time, uptime guarantee, metrics, benchmarks, and any service scope limitations. If not present, return '-' symbol.",
             "penalty": "Extract all penalty-related clauses. Mention specific conditions or events that trigger penalties, monetary value of penalties, and enforcement processes.",
             "confidentiality": "Extract confidentiality clauses in the contract. Include information type covered, parties involved, protection duration, and consequence of breach.",
             "termination": "Extract termination and renewal clauses. Specify auto-renewal conditions, exit clause, minimum notice period, early exit provisions, and other termination rules.",
             "commercials": "Extract financial/commercial information from the contract. Include all payment terms, payment amount, frequency, due dates, currency used, billing cycle, and any related conditions.",
-            "risks": "Extract all risks, assumptions, special conditions, limitations or disclaimers mentioned in the contract. Highlight uncertainties or dependencies."
+            "risks": "Extract all risks, assumptions, special conditions, limitations or disclaimers mentioned in the contract. Highlight uncertainties or dependencies. Just extract key information. "
         }
 
         final_output = {}
@@ -745,6 +624,8 @@ def extract_details(current_user):
                     - Section headings
                     - Monetary amounts
                     - Keep a clean, readable layout with consistent indentation
+                    - Focus ONLY on key information
+                    - Skip minor details and focus on essential points
 
                     Answer:"""
 
@@ -762,12 +643,11 @@ def extract_details(current_user):
                     err_msg = str(e)
                     if "rate_limit_exceeded" in err_msg or "429" in err_msg:
                         print(f"⏳ [{section}] Rate limit hit for {selected_api_key}. Trying next key...")
-                        continue  # Try next API key
+                        continue
                     print(f"❌ [{section}] Error: {err_msg}")
                     return section, f"⚠️ Extraction failed: {err_msg}", 0.0
 
             return section, "❌ All API keys failed or rate-limited", 0.0
-
 
         with ThreadPoolExecutor(max_workers=len(section_prompts)) as executor:
             futures = {
@@ -780,40 +660,81 @@ def extract_details(current_user):
                 final_output[section] = result
                 total_time += elapsed
 
-        print("✅ All extractions completed successfully.")
+        print("✅ Key information extraction completed successfully.")
         
-        # Save extraction to database if document_id is provided
-        if document_id:
-            extraction = Extraction(
-                content=final_output,
-                document_id=document_id,
-                user_id=current_user.id
-            )
-            db.session.add(extraction)
-            db.session.commit()
-            
-            extraction_id = extraction.id
-        else:
-            extraction_id = None
-        
-        return jsonify({
+        return {
             "answer": final_output,
             "time_taken": f"{total_time:.2f}s",
             "status": "success",
-            "extraction_id": extraction_id,
             "sections_extracted": list(section_prompts.keys()),
             "api_call_summary": {
                 "total_calls": api_call_count,
                 "key_usage": api_key_usage
             }
-        })
+        }
 
     except Exception as e:
         print(f"Batch Extraction Error: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({
+        return {
             "error": f"Batch extraction failed: {str(e)}",
             "status": "error"
-        }), 500
+        }
+
+def generate_summary():
+    """Helper function to generate and return summary"""
+    try:
+        summary_prompt_template = ChatPromptTemplate.from_template(SUMMARY_PROMPT)
+
+        # Create document chain with the updated prompt
+        document_chain = create_stuff_documents_chain(
+            llm=llm,
+            prompt=summary_prompt_template,
+        )
+
+        # Use reduced retrieval parameters to lower token usage
+        retriever = vectors.as_retriever(
+            search_type="similarity",
+            search_kwargs={
+                'k': 5,           # Fewer, more focused chunks
+                'fetch_k': 15,    # Limit token consumption
+                'lambda_mult': 0.7,
+                'filter': None
+            }
+        )
+
+        retrieval_chain = create_retrieval_chain(retriever, document_chain)
+        start = time.process_time()
+        response = retrieval_chain.invoke({
+            'input': 'Provide a concise summary of the document focusing on key points'
+        })
+        elapsed = time.process_time() - start
+
+        return {
+            "answer": response['answer'],
+            "time_taken": f"{elapsed:.2f}s",
+            "context_chunks": len(response.get('context', [])),
+            "status": "success"
+        }
+
+    except Exception as e:
+        print(f"Summary error: {str(e)}\n{traceback.format_exc()}")
+        return {
+            "error": f"Summary generation failed: {str(e)}",
+            "status": "error"
+        }
+
+# Extraction endpoint: returns detailed extraction using the full extraction prompt
+
+
+@app.route('/extract', methods=['GET'])
+def extract_details():
+    if not vectors:
+        return jsonify({"error": "No documents uploaded"}), 400
+    
+    if stored_extraction is None:
+        return jsonify({"error": "No extraction data available. Please upload files first."}), 400
+    
+    return jsonify(stored_extraction)
 
 
 @app.route('/dates', methods=['GET'])
@@ -850,40 +771,17 @@ def extract_all_dates():
 
 # Ask endpoint: processes a legal question based on the uploaded documents
 @app.route('/ask', methods=['POST'])
-@token_required
-def ask_question(current_user):
+def ask_question():
     if not vectors:
         return jsonify({"error": "No documents uploaded"}), 400
 
     data = request.json
     user_question = data.get("query")
-    session_id = data.get("session_id")  # Optional, if continuing an existing session
 
     if not user_question:
         return jsonify({"error": "No question provided"}), 400
 
     try:
-        # Get or create chat session
-        chat_session = None
-        if session_id:
-            chat_session = ChatSession.query.filter_by(id=session_id, user_id=current_user.id).first()
-            if not chat_session:
-                return jsonify({"error": "Chat session not found"}), 404
-        
-        if not chat_session:
-            chat_session = ChatSession(user_id=current_user.id)
-            db.session.add(chat_session)
-            db.session.commit()
-        
-        # Save user message to database
-        user_message = ChatMessage(
-            content=user_question,
-            is_user=True,
-            session_id=chat_session.id
-        )
-        db.session.add(user_message)
-        db.session.commit()
-
         # Randomly select a Groq LLM
         idx = randint(0, len(llms) - 1)
         llm_instance, selected_api_key = get_llm(idx)
@@ -910,22 +808,9 @@ def ask_question(current_user):
         response = retrieval_chain.invoke({"input": user_question})
         elapsed = time.process_time() - start
         
-        # Save AI response to database
-        ai_message = ChatMessage(
-            content=response['answer'],
-            is_user=False,
-            session_id=chat_session.id
-        )
-        db.session.add(ai_message)
-        db.session.commit()
-
         return jsonify({
             "answer": response['answer'],
             "time_taken": f"{elapsed:.2f}s",
-            "session_id": chat_session.id,
-            "message_id": ai_message.id,
-            "context_chunks": len(response.get('context', [])),
-            "status": "success",
             "api_key_used": selected_api_key[-8:],  # for partial logging
         })
 
@@ -937,96 +822,17 @@ def ask_question(current_user):
         }), 500
 
 # Get chat history for a user
-@app.route('/chat/sessions', methods=['GET'])
-@token_required
-def get_chat_sessions(current_user):
-    sessions = []
-    for session in current_user.chat_sessions:
-        messages = ChatMessage.query.filter_by(session_id=session.id).order_by(ChatMessage.timestamp).all()
-        
-        # Get the first user message as a preview
-        first_user_message = next((msg for msg in messages if msg.is_user), None)
-        preview = first_user_message.content[:50] + "..." if first_user_message else "Empty session"
-        
-        sessions.append({
-            'id': session.id,
-            'created_at': session.created_at,
-            'message_count': len(messages),
-            'preview': preview
-        })
-    
-    return jsonify({
-        'sessions': sorted(sessions, key=lambda x: x['created_at'], reverse=True)
-    })
 
-# Get messages for a specific chat session
-@app.route('/chat/sessions/<int:session_id>/messages', methods=['GET'])
-@token_required
-def get_chat_messages(current_user, session_id):
-    # Verify session belongs to user
-    session = ChatSession.query.filter_by(id=session_id, user_id=current_user.id).first()
-    if not session:
-        return jsonify({"error": "Chat session not found"}), 404
-    
-    messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp).all()
-    message_list = [{
-        'id': msg.id,
-        'content': msg.content,
-        'timestamp': msg.timestamp,
-        'is_user': msg.is_user
-    } for msg in messages]
-    
-    return jsonify({
-        'session_id': session_id,
-        'messages': message_list
-    })
 
 @app.route('/summary', methods=['POST'])
 def ask_summary():
     if not vectors:
         return jsonify({"error": "No documents uploaded"}), 400
-
-    try:
-        summary_prompt_template = ChatPromptTemplate.from_template(
-            SUMMARY_PROMPT)
-
-        # Create document chain with the updated prompt
-        document_chain = create_stuff_documents_chain(
-            llm=llm,
-            prompt=summary_prompt_template,
-        )
-
-        # Use reduced retrieval parameters to lower token usage
-        retriever = vectors.as_retriever(
-            search_type="similarity",
-            search_kwargs={
-                'k': 5,           # Fewer, more focused chunks
-                'fetch_k': 15,    # Limit token consumption
-                'lambda_mult': 0.7,
-                'filter': None
-            }
-        )
-
-        retrieval_chain = create_retrieval_chain(retriever, document_chain)
-        start = time.process_time()
-        response = retrieval_chain.invoke({
-            'input': 'Provide a concise summary of the document focusing on key points'
-        })
-        elapsed = time.process_time() - start
-
-        return jsonify({
-            "answer": response['answer'],
-            "time_taken": f"{elapsed:.2f}s",
-            "context_chunks": len(response.get('context', [])),
-            "status": "success"
-        })
-
-    except Exception as e:
-        print(f"Summary error: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({
-            "error": f"Summary generation failed: {str(e)}",
-            "status": "error"
-        }), 500
+    
+    if stored_summary is None:
+        return jsonify({"error": "No summary data available. Please upload files first."}), 400
+    
+    return jsonify(stored_summary)
 
 # Helper function to generate PDF
 def generate_pdf(title, content, is_extraction=False):
@@ -1131,11 +937,6 @@ def generate_pdf(title, content, is_extraction=False):
                     elements.append(Spacer(1, 6))
                 continue
             
-            # Handle Clause(s) Found and Interpretation sections
-            if line.startswith('**Clause') or line.startswith('**Interpretation'):
-                elements.append(Paragraph(line.replace('**', '<b>').replace('**', '</b>'), section_style))
-                continue
-                
             # Handle bullet points
             if line.startswith('- '):
                 line = '• ' + line[2:]
@@ -1222,60 +1023,6 @@ def download_chat():
         }), 500
 
 @app.route('/download/chat-history', methods=['POST'])
-@token_required
-def download_chat_history(current_user):
-    data = request.json
-    session_id = data.get("session_id")
-    
-    if not session_id:
-        return jsonify({"error": "No session ID provided"}), 400
-    
-    # Verify session belongs to user
-    session = ChatSession.query.filter_by(id=session_id, user_id=current_user.id).first()
-    if not session:
-        return jsonify({"error": "Chat session not found"}), 404
-    
-    # Get all messages in the session
-    messages = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp).all()
-    if not messages:
-        return jsonify({"error": "No messages found in this session"}), 404
-    
-    try:
-        # Format the chat history content
-        chat_content = ""
-        for i, msg in enumerate(messages):
-            if msg.is_user:
-                chat_content += f"Question {i//2 + 1}:\n{msg.content}\n\n"
-            else:
-                chat_content += f"Answer {i//2 + 1}:\n{msg.content}\n\n"
-                if i < len(messages) - 1:  # Add separator between Q&A pairs
-                    chat_content += "---\n\n"
-        
-        # Find document name if available
-        document_name = "Unknown"
-        if session.id:
-            # Try to find a document linked to any extraction made by this user
-            extraction = Extraction.query.filter_by(user_id=current_user.id).first()
-            if extraction:
-                document = Document.query.get(extraction.document_id)
-                if document:
-                    document_name = document.filename
-        
-        # Generate PDF with the chat history
-        pdf = generate_pdf_chat_history(f"Chat History: {document_name}", chat_content)
-        
-        # Create response with the PDF
-        response = make_response(pdf)
-        response.headers['Content-Type'] = 'application/pdf'
-        response.headers['Content-Disposition'] = f'attachment; filename=chat_history_{session_id}.pdf'
-        return response
-        
-    except Exception as e:
-        print(f"PDF Generation Error: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({
-            "error": f"PDF generation failed: {str(e)}",
-            "status": "error"
-        }), 500
 
 # Helper function to generate PDF for chat history
 def generate_pdf_chat_history(title, content):
@@ -1379,11 +1126,6 @@ def generate_pdf_chat_history(title, content):
                         elements.append(Spacer(1, 6))
                     continue
                 
-                # Handle Clause(s) Found and Interpretation sections
-                if line.startswith('**Clause') or line.startswith('**Interpretation'):
-                    elements.append(Paragraph(line.replace('**', '<b>').replace('**', '</b>'), question_style))
-                    continue
-                    
                 # Handle bullet points
                 if line.startswith('- '):
                     line = '• ' + line[2:]
@@ -1416,180 +1158,6 @@ def generate_pdf_chat_history(title, content):
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
-
-# User registration
-@app.route('/auth/register', methods=['POST'])
-def register():
-    data = request.json
-    
-    # Validate input data
-    if not data or not all(k in data for k in ('email', 'password', 'name')):
-        return jsonify({'error': 'Missing required fields'}), 400
-    
-    # Check if user already exists
-    existing_user = User.query.filter_by(email=data['email']).first()
-    if existing_user:
-        return jsonify({'error': 'Email already registered'}), 409
-    
-    # Hash password
-    hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    
-    # Create new user
-    new_user = User(
-        email=data['email'],
-        password=hashed_password,
-        name=data['name']
-    )
-    
-    db.session.add(new_user)
-    db.session.commit()
-    
-    # Generate token
-    token = generate_token(new_user.id)
-    
-    return jsonify({
-        'token': token,
-        'user': {
-            'id': new_user.id,
-            'email': new_user.email,
-            'name': new_user.name
-        }
-    }), 201
-
-# User login
-@app.route('/auth/login', methods=['POST'])
-def login():
-    data = request.json
-    
-    # Validate input data
-    if not data or not all(k in data for k in ('email', 'password')):
-        return jsonify({'error': 'Missing email or password'}), 400
-    
-    # Find user
-    user = User.query.filter_by(email=data['email']).first()
-    if not user or not bcrypt.checkpw(data['password'].encode('utf-8'), user.password.encode('utf-8')):
-        return jsonify({'error': 'Invalid email or password'}), 401
-    
-    # Generate token
-    token = generate_token(user.id)
-    
-    return jsonify({
-        'token': token,
-        'user': {
-            'id': user.id,
-            'email': user.email,
-            'name': user.name
-        }
-    })
-
-# Get current user profile
-@app.route('/auth/profile', methods=['GET'])
-@token_required
-def get_profile(current_user):
-    return jsonify({
-        'user': {
-            'id': current_user.id,
-            'email': current_user.email,
-            'name': current_user.name,
-            'created_at': current_user.created_at
-        }
-    })
-
-# Get user's documents and extractions
-@app.route('/user/documents', methods=['GET'])
-@token_required
-def get_user_documents(current_user):
-    documents = []
-    for doc in current_user.documents:
-        extractions = Extraction.query.filter_by(document_id=doc.id).all()
-        has_extraction = len(extractions) > 0
-        
-        documents.append({
-            'id': doc.id,
-            'filename': doc.filename,
-            'uploaded_at': doc.uploaded_at,
-            'file_type': doc.file_type,
-            'has_extraction': has_extraction
-        })
-    
-    return jsonify({
-        'documents': documents
-    })
-
-# Get all extractions for a user
-@app.route('/extractions', methods=['GET'])
-@token_required
-def get_user_extractions(current_user):
-    extractions = []
-    extraction_records = Extraction.query.filter_by(user_id=current_user.id).order_by(Extraction.created_at.desc()).all()
-    
-    for extraction in extraction_records:
-        document = Document.query.get(extraction.document_id)
-        if document:
-            extractions.append({
-                'id': extraction.id,
-                'created_at': extraction.created_at,
-                'document_id': extraction.document_id,
-                'document_name': document.filename
-            })
-    
-    return jsonify({
-        'extractions': extractions
-    })
-
-# Get a specific extraction
-@app.route('/extractions/<int:extraction_id>', methods=['GET'])
-@token_required
-def get_extraction(current_user, extraction_id):
-    extraction = Extraction.query.filter_by(id=extraction_id, user_id=current_user.id).first()
-    if not extraction:
-        return jsonify({"error": "Extraction not found"}), 404
-    
-    document = Document.query.get(extraction.document_id)
-    
-    return jsonify({
-        'id': extraction.id,
-        'created_at': extraction.created_at,
-        'document_id': extraction.document_id,
-        'document_name': document.filename if document else "Unknown",
-        'content': extraction.content
-    })
-
-# Delete a specific extraction
-@app.route('/extractions/<int:extraction_id>', methods=['DELETE'])
-@token_required
-def delete_extraction(current_user, extraction_id):
-    extraction = Extraction.query.filter_by(id=extraction_id, user_id=current_user.id).first()
-    if not extraction:
-        return jsonify({"error": "Extraction not found"}), 404
-    
-    db.session.delete(extraction)
-    db.session.commit()
-    
-    return jsonify({
-        'message': 'Extraction deleted successfully',
-        'id': extraction_id
-    })
-
-# Delete a chat session and all its messages
-@app.route('/chat/sessions/<int:session_id>', methods=['DELETE'])
-@token_required
-def delete_chat_session(current_user, session_id):
-    session = ChatSession.query.filter_by(id=session_id, user_id=current_user.id).first()
-    if not session:
-        return jsonify({"error": "Chat session not found"}), 404
-    
-    # Delete all messages in the session
-    ChatMessage.query.filter_by(session_id=session_id).delete()
-    
-    # Delete the session
-    db.session.delete(session)
-    db.session.commit()
-    
-    return jsonify({
-        'message': 'Chat session deleted successfully',
-        'id': session_id
-    })
 
 if __name__ == '__main__':
     app.run(debug=False)

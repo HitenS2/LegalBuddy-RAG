@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -10,14 +10,7 @@ import { Chat } from './components/Chat';
 import { ExtractInfo } from './components/ExtractInfo';
 import { ExtractResult } from './components/ExtractResult';
 import { Manual } from './components/Manual';
-import Login from './components/Login';
-import Register from './components/Register';
 import Header from './components/Header';
-import History from './components/History';
-import ProtectedRouteWrapper from './components/ProtectedRoute';
-
-// Context
-import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 // Types
 interface ChatMessage {
@@ -28,13 +21,11 @@ interface ChatMessage {
 }
 
 interface SummaryResponse {
-  // Define your summary response type here
   answer: string;
   time_taken: string;
 }
 
 interface ExtractResponse {
-  // Define your extract response type here
   answer: {
     [section: string]: string | object;
   };
@@ -45,11 +36,9 @@ interface ExtractResponse {
 
 // Main Layout with Header
 const MainLayout: React.FC<{children: React.ReactNode}> = ({ children }) => {
-  const { isAuthenticated, logout } = useAuth();
-  
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      <Header isLoggedIn={isAuthenticated} onLogout={logout} />
+      <Header />
       <main className="flex-grow">
         {children}
       </main>
@@ -59,13 +48,11 @@ const MainLayout: React.FC<{children: React.ReactNode}> = ({ children }) => {
 };
 
 // Custom Welcome wrapper to handle file upload
-const WelcomeWrapper: React.FC = () => {
-  // The actual Welcome component doesn't take props, so we just render it directly
-  return <Welcome />;
+const WelcomeWrapper: React.FC<{onFileSelect: (file: File) => void}> = ({ onFileSelect }) => {
+  return <Welcome onFileSelect={onFileSelect} />;
 };
 
 function AppContent() {
-  const { isAuthenticated } = useAuth();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileId, setFileId] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -77,6 +64,10 @@ function AppContent() {
   });
   const [currentMessage, setCurrentMessage] = useState('');
 
+  const handleFileSelect = (file: File) => {
+    setSelectedFile(file);
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -85,14 +76,8 @@ function AppContent() {
         const formData = new FormData();
         formData.append('file', file);
         
-        const token = localStorage.getItem('token');
-        if (!token) throw new Error('Authentication required');
-  
         const response = await fetch('http://127.0.0.1:5000/upload', {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
           body: formData,
         });
   
@@ -100,146 +85,55 @@ function AppContent() {
           throw new Error('Error uploading file');
         }
   
-        const uploadResponse = await response.json();
-        setSelectedFile(file);
-        setFileId(uploadResponse.document_id || uploadResponse.fileId);
-  
-        // The backend now automatically stores extractions for the user
-        // No need to immediately call these APIs unless needed for display
-        // We'll fetch them when navigating to the respective pages
-        
+        const data = await response.json();
+        setFileId(data.file_id);
         toast.success('File uploaded successfully!');
       } catch (error) {
-        console.error('Error uploading file:', error);
-        toast.error('Error uploading file. Please try again.');
+        console.error('Upload error:', error);
+        toast.error('Failed to upload file');
       } finally {
         setIsUploading(false);
       }
     }
   };
 
-  const handleLoginSuccess = () => {
-    // Refresh authentication state
-    toast.success('Logged in successfully!');
-  };
-
-  const handleRegisterSuccess = () => {
-    toast.success('Account created successfully!');
-  };
-  
-  // Handle sending chat messages
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentMessage.trim()) {
-      setChatHistory([
-        ...chatHistory,
-        {
-          id: Date.now(),
-          text: currentMessage,
-          timestamp: new Date().toLocaleTimeString(),
-          sender: 'user'
-        }
-      ]);
-      setCurrentMessage('');
-    }
+    if (!currentMessage.trim()) return;
+
+    const newMessage: ChatMessage = {
+      id: Date.now(),
+      text: currentMessage,
+      timestamp: new Date().toISOString(),
+      sender: 'user'
+    };
+
+    setChatHistory(prev => [...prev, newMessage]);
+    setCurrentMessage('');
+
+    // Save to localStorage
+    localStorage.setItem('chatHistory', JSON.stringify([...chatHistory, newMessage]));
   };
-  
+
   return (
-    <MainLayout>
-      <Routes>
-        {/* Public routes */}
-        <Route 
-          path="/login" 
-          element={
-            isAuthenticated ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Login onLoginSuccess={handleLoginSuccess} />
-            )
-          } 
-        />
-        <Route 
-          path="/register" 
-          element={
-            isAuthenticated ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Register onRegisterSuccess={handleRegisterSuccess} />
-            )
-          } 
-        />
-
-        {/* Protected routes */}
-        <Route 
-          path="/" 
-          element={
-            <ProtectedRouteWrapper>
-              <WelcomeWrapper />
-            </ProtectedRouteWrapper>
-          }
-        />
-        <Route
-          path="/summary"
-          element={
-            <ProtectedRouteWrapper>
-              <Summary selectedFile={selectedFile} />
-            </ProtectedRouteWrapper>
-          }
-        />
-        <Route
-          path="/chat"
-          element={
-            <ProtectedRouteWrapper>
-              <Chat fileId={fileId} />
-            </ProtectedRouteWrapper>
-          }
-        />
-        <Route
-          path="/extract"
-          element={
-            <ProtectedRouteWrapper>
-              <ExtractInfo selectedFile={selectedFile} />
-            </ProtectedRouteWrapper>
-          }
-        />
-        <Route
-          path="/extract/result"
-          element={
-            <ProtectedRouteWrapper>
-              <ExtractResult />
-            </ProtectedRouteWrapper>
-          }
-        />
-        <Route
-          path="/history"
-          element={
-            <ProtectedRouteWrapper>
-              <History />
-            </ProtectedRouteWrapper>
-          }
-        />
-        <Route 
-          path="/manual" 
-          element={
-            <ProtectedRouteWrapper>
-              <Manual />
-            </ProtectedRouteWrapper>
-          } 
-        />
-
-        {/* Fallback route */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </MainLayout>
+    <Router>
+      <MainLayout>
+        <Routes>
+          <Route path="/" element={<WelcomeWrapper onFileSelect={handleFileSelect} />} />
+          <Route path="/summary" element={<Summary selectedFile={selectedFile} />} />
+          <Route path="/chat" element={<Chat />} />
+          <Route path="/extract" element={<ExtractInfo />} />
+          <Route path="/extract-result" element={<ExtractResult />} />
+          <Route path="/manual" element={<Manual />} />
+          <Route path="/history" element={<History />} />
+        </Routes>
+      </MainLayout>
+    </Router>
   );
 }
 
 function App() {
-  return (
-    <Router>
-      <AppContent />
-    </Router>
-  );
+  return <AppContent />;
 }
 
 export default App;

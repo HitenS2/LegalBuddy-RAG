@@ -47,32 +47,23 @@ export const Chat: React.FC<ChatProps> = ({ fileId }) => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Get the token from localStorage
-  const token = localStorage.getItem('token');
-
   // Load chat session from URL parameter if present
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
     const sessionParam = queryParams.get('session');
     
-    if (sessionParam && token) {
+    if (sessionParam) {
       const sessionIdNum = parseInt(sessionParam, 10);
       setSessionId(sessionIdNum);
       loadChatHistory(sessionIdNum);
     }
-  }, [location.search, token]);
+  }, [location.search]);
 
   // Load chat history for a given session
   const loadChatHistory = async (sessionIdToLoad: number) => {
-    if (!token) return;
-    
     setIsLoadingHistory(true);
     try {
-      const response = await fetch(`http://127.0.0.1:5000/chat/sessions/${sessionIdToLoad}`, {
-        headers: {
-          "Authorization": `Bearer ${token}`
-        }
-      });
+      const response = await fetch(`http://127.0.0.1:5000/chat/sessions/${sessionIdToLoad}`);
       
       if (!response.ok) {
         throw new Error("Failed to load chat history");
@@ -110,11 +101,6 @@ export const Chat: React.FC<ChatProps> = ({ fileId }) => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentMessage.trim()) return;
-    if (!token) {
-      alert("Please login to use the chat functionality");
-      // Redirect to login page
-      return;
-    }
 
     // Create and append the user message.
     const userMessage: ChatMessage = {
@@ -132,8 +118,7 @@ export const Chat: React.FC<ChatProps> = ({ fileId }) => {
       const response = await fetch("http://127.0.0.1:5000/ask", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({ 
           query: userMessage.text,
@@ -214,7 +199,7 @@ export const Chat: React.FC<ChatProps> = ({ fileId }) => {
   };
   
   const handleDownloadFullHistory = async () => {
-    if (!sessionId || !token) {
+    if (!sessionId) {
       alert("No chat session available");
       return;
     }
@@ -224,8 +209,7 @@ export const Chat: React.FC<ChatProps> = ({ fileId }) => {
       const response = await fetch("http://127.0.0.1:5000/download/chat-history", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${token}`
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({ 
           session_id: sessionId

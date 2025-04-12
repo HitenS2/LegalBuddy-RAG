@@ -1,0 +1,10 @@
+flask
+flask_cors
+docx
+python-docx
+pypdf
+reportlab
+langchain_groq
+langchain
+langchain_community
+langchain_google_genai
